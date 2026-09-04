@@ -1,0 +1,55 @@
+name: AI Builders Digest
+
+on:
+  schedule:
+    # 10:00 Asia/Shanghai = 02:00 UTC (UTC+8)
+    - cron: '0 2 * * *'
+  workflow_dispatch: # 允许手动触发测试
+
+concurrency:
+  group: digest-run
+  cancel-in-progress: false
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout this repo
+        uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Clone follow-builders skill
+        run: |
+          git clone --depth=1 https://github.com/zarazhangrui/follow-builders.git
+          cd follow-builders/scripts
+          npm ci
+
+      - name: Generate digest JSON
+        id: digest
+        run: |
+          cd follow-builders/scripts
+          node prepare-digest.js > /tmp/digest.json 2>/dev/null
+          echo "stats: $(node -e "const d=require('/tmp/digest.json'); console.log(JSON.stringify(d.stats||{}))")"
+
+      - name: Format digest markdown
+        id: format
+        run: |
+          node scripts/format-digest.js < /tmp/digest.json > /tmp/digest.md
+          echo "size: $(wc -c </tmp/digest.md) bytes"
+
+      - name: Send to Lark
+        env:
+          LARK_APP_ID: ${{ secrets.LARK_APP_ID }}
+          LARK_APP_SECRET: ${{ secrets.LARK_APP_SECRET }}
+          LARK_USER_OPEN_ID: ${{ secrets.LARK_USER_OPEN_ID }}
+        run: |
+          node scripts/send-lark.js /tmp/digest.md
+
+      - name: Cleanup
+        if: always()
+        run: rm -rf follow-builders
