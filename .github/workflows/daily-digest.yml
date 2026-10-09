@@ -10,10 +10,14 @@ concurrency:
   group: digest-run
   cancel-in-progress: false
 
+permissions:
+  contents: read
+  models: read # 未配置 AI_API_KEY 时，用 GITHUB_TOKEN 走 GitHub Models
+
 jobs:
   digest:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - name: Checkout this repo
         uses: actions/checkout@v4
@@ -23,6 +27,15 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
+      - name: Install Chinese fonts
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq fonts-noto-cjk
+          fc-list :lang=zh | head -5
+
+      - name: Install dependencies
+        run: npm ci
+
       - name: Clone follow-builders skill
         run: |
           git clone --depth=1 https://github.com/zarazhangrui/follow-builders.git
@@ -30,25 +43,45 @@ jobs:
           npm ci
 
       - name: Generate digest JSON
-        id: digest
         run: |
           cd follow-builders/scripts
-          node prepare-digest.js > /tmp/digest.json 2>/dev/null
-          echo "stats: $(node -e "const d=require('/tmp/digest.json'); console.log(JSON.stringify(d.stats||{}))")"
+          node prepare-digest.js > ../../digest.json
+          node -e "const d=require('../../digest.json');console.log('stats:',JSON.stringify(d.stats||{}))"
 
-      - name: Format digest markdown
-        id: format
-        run: |
-          node scripts/format-digest.js < /tmp/digest.json > /tmp/digest.md
-          echo "size: $(wc -c </tmp/digest.md) bytes"
+      # 中文翻译 + 提炼成结构化总结；失败不中断，走下面的降级分支
+      - name: Summarize into Chinese
+        id: summarize
+        continue-on-error: true
+        env:
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          AI_BASE_URL: ${{ vars.AI_BASE_URL }}
+          AI_MODEL: ${{ vars.AI_MODEL }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/summarize.js < digest.json > summary.json
 
-      - name: Send to Lark
+      - name: Render long image
+        if: steps.summarize.outcome == 'success'
+        run: node scripts/render-image.js summary.json digest.png
+
+      - name: Send image to Lark
+        if: steps.summarize.outcome == 'success'
+        env:
+          LARK_APP_ID: ${{ secrets.LARK_APP_ID }}
+          LARK_APP_SECRET: ${{ secrets.LARK_APP_SECRET }}
+          LARK_USER_OPEN_ID: ${{ secrets.LARK_USER_OPEN_ID }}
+        run: node scripts/send-lark.js digest.png summary.json
+
+      # 降级：LLM 不可用时退回英文原文文本消息，保证不漏报
+      - name: Fallback to English text digest
+        if: steps.summarize.outcome != 'success'
         env:
           LARK_APP_ID: ${{ secrets.LARK_APP_ID }}
           LARK_APP_SECRET: ${{ secrets.LARK_APP_SECRET }}
           LARK_USER_OPEN_ID: ${{ secrets.LARK_USER_OPEN_ID }}
         run: |
-          node scripts/send-lark.js /tmp/digest.md
+          echo "::warning::中文总结生成失败，已降级发送英文原文"
+          { echo "**⚠️ 中文总结生成失败，已降级为英文原文**"; echo ""; node scripts/format-digest.js < digest.json; } \
+            | node scripts/send-lark.js --text -
 
       - name: Cleanup
         if: always()

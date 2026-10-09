@@ -1,0 +1,17 @@
+{
+  "name": "ai-digest",
+  "version": "2.0.0",
+  "private": true,
+  "description": "AI Builders Digest 中文图片版 — 抓取 follow-builders feed，翻译提炼成中文总结，渲染成长图并推送到飞书私聊",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "summarize": "node scripts/summarize.js",
+    "render": "node scripts/render-image.js",
+    "send": "node scripts/send-lark.js"
+  },
+  "dependencies": {
+    "puppeteer": "25.13.0"
+  }
+}
