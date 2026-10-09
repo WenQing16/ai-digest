@@ -12,7 +12,6 @@ concurrency:
 
 permissions:
   contents: read
-  models: read # 未配置 AI_API_KEY 时，用 GITHUB_TOKEN 走 GitHub Models
 
 jobs:
   digest:
@@ -56,7 +55,6 @@ jobs:
           AI_API_KEY: ${{ secrets.AI_API_KEY }}
           AI_BASE_URL: ${{ vars.AI_BASE_URL }}
           AI_MODEL: ${{ vars.AI_MODEL }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: node scripts/summarize.js < digest.json > summary.json
 
       - name: Render long image

@@ -35,13 +35,14 @@ follow-builders 中央 feed
 | `LARK_APP_SECRET` | 飞书开发者后台 https://open.feishu.cn/app/cli_aa10d8df4db81bd6 里的 App Secret |
 | `LARK_USER_OPEN_ID` | `ou_01b19445427e92c8aa441a72192ca01a` |
 
-### 可选的 LLM 配置
+### LLM 配置（必需）
 
-翻译质量取决于用哪个模型。**不配也能跑**，默认走 GitHub Models 免费额度。
+> ⚠️ GitHub Models 已于 **2026-07-30 正式退役**，不再能当免费兜底。
+> 现在必须自备一个 OpenAI 兼容接口的 key。
 
 | 类型 | 名称 | 说明 |
 | --- | --- | --- |
-| Secret | `AI_API_KEY` | 任意 OpenAI 兼容接口的密钥。配了就优先用它，翻译质量更好 |
+| Secret | `AI_API_KEY` | **必填**。任意 OpenAI 兼容接口的密钥 |
 | Variable | `AI_BASE_URL` | 接口地址，默认 `https://api.deepseek.com/v1` |
 | Variable | `AI_MODEL` | 模型名，默认 `deepseek-chat` |
 
@@ -52,8 +53,10 @@ follow-builders 中央 feed
 | DeepSeek | `https://api.deepseek.com/v1` | `deepseek-chat` |
 | 月之暗面 Kimi | `https://api.moonshot.cn/v1` | `moonshot-v1-8k` |
 | 智谱 GLM | `https://open.bigmodel.cn/api/paas/v4` | `glm-4-air` |
+| OpenRouter | `https://openrouter.ai/api/v1` | 例如 `google/gemini-2.0-flash-exp:free` |
 | OpenAI | `https://api.openai.com/v1` | `gpt-4o-mini` |
-| 不配 `AI_API_KEY` | （自动） | `openai/gpt-4o-mini`（GitHub Models 兜底） |
+
+只填 `AI_API_KEY` 时走 DeepSeek 默认值；换别家再加 `AI_BASE_URL` / `AI_MODEL` 两个 Variable。
 
 ## 文件
 
@@ -92,6 +95,6 @@ PUPPETEER_EXECUTABLE_PATH="/c/Program Files (x86)/Microsoft/Edge/Application/mse
 ## Setup
 
 1. 仓库 Settings → Secrets and variables → Actions，按上表填好三个 Lark Secret。
-2. （可选）补 `AI_API_KEY` 提升翻译质量。
+2. 再补一个 `AI_API_KEY`（必需，GitHub Models 已退役），需要换服务商就加 `AI_BASE_URL` / `AI_MODEL` 两个 Variable。
 3. Actions 页 → "AI Builders Digest" → Run workflow 测一次。
 4. 跑通后，之后每天北京时间 10:00 会自动掉进你的飞书私聊。

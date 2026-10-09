@@ -5,14 +5,14 @@
 // 输入（stdin）：prepare-digest.js 输出的原始 JSON（英文推文 / 播客 / 博客）
 // 输出（stdout）：结构化中文总结 JSON，供 render-image.js 渲染成长图
 //
-// LLM 选择顺序（自动探测，无需改代码）：
-//   1) AI_API_KEY   —— 任意 OpenAI 兼容接口
-//                      默认 base_url = https://api.deepseek.com/v1
-//                      默认 model    = deepseek-chat
-//                      可用 AI_BASE_URL / AI_MODEL 覆盖
-//                      常见组合：DeepSeek / Kimi / 智谱 GLM / 通义 / OpenAI
-//   2) GITHUB_TOKEN —— 兜底走 GitHub Models（Actions 里自带，零成本）
-//                      默认 model = openai/gpt-4o-mini
+// LLM 配置（需要一个 OpenAI 兼容接口的 key）：
+//   AI_API_KEY  —— 必填。任意 OpenAI 兼容接口的 key
+//   AI_BASE_URL —— 可选，默认 https://api.deepseek.com/v1
+//   AI_MODEL    —— 可选，默认 deepseek-chat
+//   常见组合：DeepSeek / Kimi / 智谱 GLM / 通义 / OpenAI / OpenRouter
+//
+// 注意：GitHub Models 已于 2026-07-30 正式退役（官方文档），
+//       不再作为兜底方案，必须配置 AI_API_KEY。
 //
 // 用法：node scripts/summarize.js < /tmp/digest.json > /tmp/summary.json
 // ============================================================================
@@ -20,7 +20,6 @@
 const AI_API_KEY = (process.env.AI_API_KEY || '').trim();
 const AI_BASE_URL = (process.env.AI_BASE_URL || '').trim().replace(/\/+$/, '');
 const AI_MODEL = (process.env.AI_MODEL || '').trim();
-const GH_TOKEN = (process.env.GITHUB_TOKEN || '').trim();
 
 // -- 截断上限：控制 token 消耗，避免长播客转写稿把上下文打爆 ---------------
 const LIMITS = {
@@ -41,27 +40,23 @@ async function readStdin() {
 }
 
 // -- Provider 解析 -----------------------------------------------------------
+// 只认 AI_API_KEY。GitHub Models 已于 2026-07-30 退役，不再兜底。
 function resolveProvider() {
-  if (AI_API_KEY) {
-    return {
-      name: 'AI_API_KEY (OpenAI 兼容接口)',
-      baseUrl: AI_BASE_URL || 'https://api.deepseek.com/v1',
-      model: AI_MODEL || 'deepseek-chat',
-      key: AI_API_KEY,
-    };
+  if (!AI_API_KEY) {
+    throw new Error(
+      '未配置 AI_API_KEY，无法生成中文总结。' +
+        '请在仓库 Settings → Secrets and variables → Actions 里添加 AI_API_KEY' +
+        '（任意 OpenAI 兼容接口的 key，如 DeepSeek / Kimi / 智谱 / 通义；' +
+        '非 DeepSeek 时再用 Variables 配 AI_BASE_URL 和 AI_MODEL）。' +
+        '注：GitHub Models 已于 2026-07-30 退役，不能再当免费兜底。',
+    );
   }
-  if (GH_TOKEN) {
-    return {
-      name: 'GitHub Models (兜底)',
-      baseUrl: 'https://models.github.ai/inference',
-      model: AI_MODEL || 'openai/gpt-4o-mini',
-      key: GH_TOKEN,
-    };
-  }
-  throw new Error(
-    '没有可用的 LLM 凭据。请在 Actions Secrets 里配置 AI_API_KEY（推荐），' +
-      '或确保 workflow 具有 models: read 权限以使用 GITHUB_TOKEN。',
-  );
+  return {
+    name: 'AI_API_KEY (OpenAI 兼容接口)',
+    baseUrl: AI_BASE_URL || 'https://api.deepseek.com/v1',
+    model: AI_MODEL || 'deepseek-chat',
+    key: AI_API_KEY,
+  };
 }
 
 // -- 调用 LLM ----------------------------------------------------------------
