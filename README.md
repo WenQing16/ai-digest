@@ -45,11 +45,14 @@ follow-builders 中央 feed
 | Secret | `AI_API_KEY` | **必填**。任意 OpenAI 兼容接口的密钥 |
 | Variable | `AI_BASE_URL` | 接口地址，默认 `https://api.deepseek.com/v1` |
 | Variable | `AI_MODEL` | 模型名，默认 `deepseek-chat` |
+| Variable | `AI_MAX_TOKENS` | 输出上限，默认 8000 |
+| Variable | `AI_DISABLE_THINKING` | 关掉推理模型的思维链（`1` 开 / `0` 关）。`AI_BASE_URL` 含 `minimax` 时自动开启 |
 
 常见组合：
 
 | 服务 | `AI_BASE_URL` | `AI_MODEL` |
 | --- | --- | --- |
+| **MiniMax（当前在用）** | `https://api.minimaxi.com/v1` | `MiniMax-M3` |
 | DeepSeek | `https://api.deepseek.com/v1` | `deepseek-chat` |
 | 月之暗面 Kimi | `https://api.moonshot.cn/v1` | `moonshot-v1-8k` |
 | 智谱 GLM | `https://open.bigmodel.cn/api/paas/v4` | `glm-4-air` |
@@ -57,6 +60,12 @@ follow-builders 中央 feed
 | OpenAI | `https://api.openai.com/v1` | `gpt-4o-mini` |
 
 只填 `AI_API_KEY` 时走 DeepSeek 默认值；换别家再加 `AI_BASE_URL` / `AI_MODEL` 两个 Variable。
+
+**推理模型的坑**：MiniMax M 系列（以及 DeepSeek-R1 一类）默认会把思维链
+`<think>…</think>` 写进正文，既拖慢速度又容易把 `max_tokens` 吃光导致 JSON 被截断。
+本脚本的处理：base_url 含 `minimax` 时自动带 `thinking: { type: "disabled" }`；
+同时无论如何都会在解析前剥掉 `<think>` 块。如果某家接口不认这个参数，
+会自动去掉参数重试，不会整轮失败。
 
 ## 文件
 

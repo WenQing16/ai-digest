@@ -9,7 +9,10 @@
 //   AI_API_KEY  —— 必填。任意 OpenAI 兼容接口的 key
 //   AI_BASE_URL —— 可选，默认 https://api.deepseek.com/v1
 //   AI_MODEL    —— 可选，默认 deepseek-chat
-//   常见组合：DeepSeek / Kimi / 智谱 GLM / 通义 / OpenAI / OpenRouter
+//   AI_MAX_TOKENS      —— 可选，默认 8000
+//   AI_DISABLE_THINKING—— 可选，关掉推理模型的思维链；
+//                         base_url 含 minimax 时自动开启
+//   常见组合：MiniMax / DeepSeek / Kimi / 智谱 GLM / 通义 / OpenAI / OpenRouter
 //
 // 注意：GitHub Models 已于 2026-07-30 正式退役（官方文档），
 //       不再作为兜底方案，必须配置 AI_API_KEY。
@@ -20,6 +23,21 @@
 const AI_API_KEY = (process.env.AI_API_KEY || '').trim();
 const AI_BASE_URL = (process.env.AI_BASE_URL || '').trim().replace(/\/+$/, '');
 const AI_MODEL = (process.env.AI_MODEL || '').trim();
+// 输出上限：够放下整份中文总结 JSON 即可，别设太大（部分接口会拒绝超限值）
+let MAX_TOKENS = Number(process.env.AI_MAX_TOKENS || 8000) || 0;
+
+// 是否显式关闭推理模型的思维链。
+// MiniMax M 系列默认会把 <think> 写进正文，既慢又容易把 max_tokens 吃光；
+// 未显式配置时，只要 base_url 是 MiniMax 就自动关掉。
+const DISABLE_THINKING = (() => {
+  const raw = (process.env.AI_DISABLE_THINKING || '').trim();
+  if (raw) return !/^(0|false|no|off)$/i.test(raw);
+  return /minimax/i.test(AI_BASE_URL);
+})();
+
+// 运行期降级开关：接口不认某个参数时逐个关掉，而不是整轮失败
+let THINKING_REJECTED = false;
+let JSON_MODE_REJECTED = false;
 
 // -- 截断上限：控制 token 消耗，避免长播客转写稿把上下文打爆 ---------------
 const LIMITS = {
@@ -67,6 +85,9 @@ async function chat(provider, messages, useJsonMode) {
     temperature: 0.3,
   };
   if (useJsonMode) body.response_format = { type: 'json_object' };
+  if (MAX_TOKENS > 0) body.max_tokens = MAX_TOKENS;
+  // MiniMax 等推理模型：关掉思维链，直接给答案
+  if (DISABLE_THINKING && !THINKING_REJECTED) body.thinking = { type: 'disabled' };
 
   const res = await fetch(`${provider.baseUrl}/chat/completions`, {
     method: 'POST',
@@ -90,8 +111,20 @@ async function chat(provider, messages, useJsonMode) {
   } catch (e) {
     throw new Error(`LLM 返回的不是 JSON 信封: ${raw.slice(0, 300)}`);
   }
-  const content = data?.choices?.[0]?.message?.content;
+  const choice = data?.choices?.[0];
+  if (choice?.finish_reason === 'length') {
+    console.error('[summarize] 警告：输出被 max_tokens 截断，可能无法解析');
+  }
+  const content = choice?.message?.content;
   if (!content) throw new Error(`LLM 返回内容为空: ${raw.slice(0, 300)}`);
+  // 排障用：把模型原始输出落盘（AI_DEBUG_DUMP=/path/to/raw.txt）
+  if (process.env.AI_DEBUG_DUMP) {
+    try {
+      require('fs').writeFileSync(process.env.AI_DEBUG_DUMP, content);
+    } catch {
+      /* 忽略 */
+    }
+  }
   return content;
 }
 
@@ -201,13 +234,43 @@ ${sourceText}`;
 }
 
 // -- JSON 解析（带修复） -----------------------------------------------------
+// 部分模型（MiniMax M 系列、DeepSeek-R1 等）会把思维链直接写进 content，
+// 必须先剥掉，否则 <think> 里出现的花括号会污染 JSON 定位。
+function stripThink(text) {
+  // 完整配对 <think>…</think>；未闭合的 <think> 则一直删到结尾
+  return String(text || '')
+    .replace(/<think(?:ing)?>[\s\S]*?(?:<\/think(?:ing)?>|$)/gi, '')
+    .trim();
+}
+
 function extractJson(text) {
-  let t = String(text || '').trim();
-  t = t.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '');
+  let t = stripThink(text)
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/```\s*$/, '')
+    .trim();
+
+  // 先按「第一个 { 到最后一个 }」试
   const start = t.indexOf('{');
   const end = t.lastIndexOf('}');
-  if (start === -1 || end === -1 || end <= start) throw new Error('未找到 JSON 对象');
-  return JSON.parse(t.slice(start, end + 1));
+  if (start !== -1 && end > start) {
+    try {
+      return JSON.parse(t.slice(start, end + 1));
+    } catch {
+      /* 落到下面逐个扫描 */
+    }
+  }
+
+  // 兜底：从每个 { 起，自后向前收缩右边界，找一个能解析的完整对象
+  for (let i = t.indexOf('{'); i !== -1; i = t.indexOf('{', i + 1)) {
+    for (let k = t.lastIndexOf('}'); k > i; k = t.lastIndexOf('}', k - 1)) {
+      try {
+        return JSON.parse(t.slice(i, k + 1));
+      } catch {
+        /* 继续收缩 */
+      }
+    }
+  }
+  throw new Error('未找到可解析的 JSON 对象');
 }
 
 // -- 校验与清洗 --------------------------------------------------------------
@@ -286,27 +349,43 @@ function todayCn() {
 // -- 主流程 ------------------------------------------------------------------
 async function summarizeWithRetry(provider, messages) {
   let lastErr;
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    // 第 1、2 次尝试走 JSON 模式；第 3 次关掉，兼容不支持该参数的接口
-    const useJsonMode = attempt <= 2;
+  // 留 5 次：参数降级本身也要占用次数（thinking / max_tokens / json 模式各一次）
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    // 前两次尝试走 JSON 模式；第三次起或已被拒绝则关掉，兼容不支持该参数的接口
+    const useJsonMode = attempt <= 2 && !JSON_MODE_REJECTED;
     try {
       const content = await chat(provider, messages, useJsonMode);
       return extractJson(content);
     } catch (err) {
       lastErr = err;
-      // 接口不认 response_format → 立刻关掉重试
-      if (/response_format|json_object|json mode/i.test(err.message)) {
-        try {
-          const content = await chat(provider, messages, false);
-          return extractJson(content);
-        } catch (e2) {
-          lastErr = e2;
-        }
+      let retryNow = false;
+
+      // 接口不认 thinking（关思维链）→ 记下来，立刻去掉该参数重试
+      if (!THINKING_REJECTED && /thinking|reasoning_effort|reasoning/i.test(err.message)) {
+        console.error('[summarize] 该接口不接受 thinking 参数，去掉后重试');
+        THINKING_REJECTED = true;
+        retryNow = true;
       }
+
+      // 接口不认 max_tokens 的取值 → 去掉该参数重试
+      if (MAX_TOKENS > 0 && /max_?tokens|maximum context|too large/i.test(err.message)) {
+        console.error('[summarize] 该接口不接受该 max_tokens，去掉后重试');
+        MAX_TOKENS = 0;
+        retryNow = true;
+      }
+
+      // 接口不认 response_format → 关掉 json 模式重试
+      if (!JSON_MODE_REJECTED && /response_format|json_object|json mode/i.test(err.message)) {
+        console.error('[summarize] 该接口不支持 JSON 模式，关闭后重试');
+        JSON_MODE_REJECTED = true;
+        retryNow = true;
+      }
+
       console.error(`[summarize] 第 ${attempt} 次尝试失败：${err.message}`);
+      if (retryNow) continue;
       // 参数类错误重试无意义，直接抛出
       if (err.status && err.status >= 400 && err.status < 500 && err.status !== 429) break;
-      if (attempt < 3) await new Promise((r) => setTimeout(r, 2000 * attempt));
+      if (attempt < 5) await new Promise((r) => setTimeout(r, 2000 * attempt));
     }
   }
   throw lastErr;

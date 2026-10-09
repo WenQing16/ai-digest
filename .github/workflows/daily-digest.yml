@@ -55,6 +55,8 @@ jobs:
           AI_API_KEY: ${{ secrets.AI_API_KEY }}
           AI_BASE_URL: ${{ vars.AI_BASE_URL }}
           AI_MODEL: ${{ vars.AI_MODEL }}
+          AI_MAX_TOKENS: ${{ vars.AI_MAX_TOKENS }}
+          AI_DISABLE_THINKING: ${{ vars.AI_DISABLE_THINKING }}
         run: node scripts/summarize.js < digest.json > summary.json
 
       - name: Render long image
